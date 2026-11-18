@@ -1,0 +1,119 @@
+# Canonical copy of .github/workflows/android.yml in peterqifei/petergram-android-ci, the build repository of
+# A143. That repository holds this file and nothing else. The source is not there: the job fetches the commit it
+# is asked for from public GitLab, so no history reaches GitHub. All build logic is ci/github-build/android/ci-build.sh
+# in the fetched commit; this file only sets up the runner, the caches and the artifact.
+# scripts/github-build.sh keeps the build repository's copy equal to this one and dispatches it.
+name: android
+run-name: android ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Commit of my-denia-group/Petergram-Android on GitLab, 40 lower-case hex characters
+        required: true
+        type: string
+      request_id:
+        description: The caller's id for this run; it is in the run title, so the caller finds the run by it
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One build at a time. A run waiting behind another is replaced by a newer waiting one; the driver starts one.
+concurrency:
+  group: android-build
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Release APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check the inputs
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::source_sha must be 40 lower-case hex characters"; exit 1; }
+          [[ "$REQUEST_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "::error::request_id must be 1 to 64 characters of A-Za-z0-9._-"; exit 1; }
+
+      # The Android SDK stays: ci-build.sh installs the pinned platform, build tools, NDK and CMake into it.
+      - name: Free disk
+        run: |
+          echo "before:"; nproc; free -g; df -h / /mnt
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/share/miniconda /usr/local/share/boost \
+            /usr/local/share/powershell /usr/local/.ghcup /opt/ghc /opt/az "$AGENT_TOOLSDIRECTORY/CodeQL"
+          sudo docker image prune --all --force > /dev/null || true
+          echo "after:"; nproc; free -g; df -h / /mnt
+
+      - name: Fetch the commit from GitLab
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          git init --quiet --initial-branch=ci source
+          cd source
+          git remote add origin https://gitlab.com/my-denia-group/Petergram-Android.git
+          git fetch --quiet --depth=1 origin "$SOURCE_SHA"
+          git -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD
+          head=$(git rev-parse HEAD)
+          [ "$head" = "$SOURCE_SHA" ] || { echo "::error::fetched $head, asked for $SOURCE_SHA"; exit 1; }
+          echo "source $head, tree $(git rev-parse 'HEAD^{tree}')"
+          [ -f ci/github-build/android/ci-build.sh ] || { echo "::error::this commit has no ci/github-build/android/ci-build.sh"; exit 1; }
+
+      - name: JDK 17
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The key follows what decides the Gradle dependencies: the base commit in the lock, root.patch and the
+      # overlay's gradle file. The vendor tree itself is not cached; native code is built from source every run.
+      - name: Gradle cache
+        id: gradle-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: gradle-linux-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
+          restore-keys: |
+            gradle-linux-
+
+      - name: Build
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          TELEGRAM_APP_ID: ${{ secrets.TELEGRAM_APP_ID }}
+          TELEGRAM_APP_HASH: ${{ secrets.TELEGRAM_APP_HASH }}
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: bash source/ci/github-build/android/ci-build.sh "$GITHUB_WORKSPACE/ci-out"
+
+      - name: Save the Gradle cache
+        if: ${{ !cancelled() && steps.gradle-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper/dists
+          key: gradle-linux-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
+
+      - name: Upload the APK and its identity
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: petergram-android
+          path: ci-out/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Runner after
+        if: ${{ !cancelled() }}
+        run: |
+          nproc; free -g; df -h / /mnt
