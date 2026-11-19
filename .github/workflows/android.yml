@@ -1,7 +1,9 @@
 # Canonical copy of .github/workflows/android.yml in peterqifei/petergram-android-ci, the build repository of
-# A143. That repository holds this file and nothing else. The source is not there: the job fetches the commit it
+# A144. That repository holds this file and nothing else. The source is not there: the job fetches the commit it
 # is asked for from public GitLab, so no history reaches GitHub. All build logic is ci/github-build/android/ci-build.sh
 # in the fetched commit; this file only sets up the runner, the caches and the artifact.
+# The `variant` input picks which APK: release (the default, the package for friends) or debug (the `.dev` daily
+# candidate). It keys the Gradle caches and reaches ci-build.sh as VARIANT; the job title shows it.
 # scripts/github-build.sh keeps the build repository's copy equal to this one and dispatches it.
 name: android
 run-name: android ${{ inputs.request_id }}
@@ -16,6 +18,11 @@ on:
       request_id:
         description: The caller's id for this run; it is in the run title, so the caller finds the run by it
         required: true
+        type: string
+      variant:
+        description: Which APK to build - release (io.gitlab.mydenia.petergram) or debug (the .dev daily candidate)
+        required: false
+        default: 'release'
         type: string
 
 permissions:
@@ -32,7 +39,7 @@ defaults:
 
 jobs:
   build:
-    name: Release APK
+    name: APK (${{ inputs.variant || 'release' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -40,9 +47,12 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           REQUEST_ID: ${{ inputs.request_id }}
+          VARIANT: ${{ inputs.variant || 'release' }}
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::source_sha must be 40 lower-case hex characters"; exit 1; }
           [[ "$REQUEST_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "::error::request_id must be 1 to 64 characters of A-Za-z0-9._-"; exit 1; }
+          case "$VARIANT" in release|debug) ;; *) echo "::error::variant must be release or debug (got '$VARIANT')"; exit 1 ;; esac
+          echo "variant $VARIANT"
 
       # The Android SDK stays: ci-build.sh installs the pinned platform, build tools, NDK and CMake into it.
       - name: Free disk
@@ -74,22 +84,27 @@ jobs:
           java-version: '17'
 
       # The key follows what decides the Gradle dependencies: the base commit in the lock, root.patch and the
-      # overlay's gradle file. The vendor tree itself is not cached; native code is built from source every run.
+      # overlay's gradle file, plus the variant, because a release and a debug build fill the local build cache
+      # (build-cache-1) with different tasks. The vendor tree itself is not cached; native code is built from
+      # source every run.
       - name: Gradle cache
         id: gradle-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.gradle/caches/modules-2
+            ~/.gradle/caches/build-cache-1
             ~/.gradle/wrapper/dists
-          key: gradle-linux-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
+          key: gradle-linux-${{ inputs.variant || 'release' }}-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
           restore-keys: |
+            gradle-linux-${{ inputs.variant || 'release' }}-
             gradle-linux-
 
       - name: Build
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           REQUEST_ID: ${{ inputs.request_id }}
+          VARIANT: ${{ inputs.variant || 'release' }}
           TELEGRAM_APP_ID: ${{ secrets.TELEGRAM_APP_ID }}
           TELEGRAM_APP_HASH: ${{ secrets.TELEGRAM_APP_HASH }}
           GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
@@ -101,8 +116,9 @@ jobs:
         with:
           path: |
             ~/.gradle/caches/modules-2
+            ~/.gradle/caches/build-cache-1
             ~/.gradle/wrapper/dists
-          key: gradle-linux-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
+          key: gradle-linux-${{ inputs.variant || 'release' }}-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
 
       - name: Upload the APK and its identity
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
