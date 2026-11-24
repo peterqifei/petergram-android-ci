@@ -2,8 +2,9 @@
 # A144. That repository holds this file and nothing else. The source is not there: the job fetches the commit it
 # is asked for from public GitLab, so no history reaches GitHub. All build logic is ci/github-build/android/ci-build.sh
 # in the fetched commit; this file only sets up the runner, the caches and the artifact.
-# The `variant` input picks which APK: release (the default, the package for friends) or debug (the `.dev` daily
-# candidate). It keys the Gradle caches and reaches ci-build.sh as VARIANT; the job title shows it.
+# The `variant` input picks which APK: release (the default, the package for friends), debug (the `.dev` daily
+# candidate), or perf (the `.perf` measurement build with R8, profileable manifest, and symbol bundle).
+# It keys the Gradle caches and reaches ci-build.sh as VARIANT; the job title shows it.
 # scripts/github-build.sh keeps the build repository's copy equal to this one and dispatches it.
 name: android
 run-name: android ${{ inputs.request_id }}
@@ -20,7 +21,7 @@ on:
         required: true
         type: string
       variant:
-        description: Which APK to build - release (io.gitlab.mydenia.petergram) or debug (the .dev daily candidate)
+        description: Which APK to build - release (io.gitlab.mydenia.petergram), debug (.dev daily candidate), or perf (.perf measurement build)
         required: false
         default: 'release'
         type: string
@@ -51,7 +52,7 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::source_sha must be 40 lower-case hex characters"; exit 1; }
           [[ "$REQUEST_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "::error::request_id must be 1 to 64 characters of A-Za-z0-9._-"; exit 1; }
-          case "$VARIANT" in release|debug) ;; *) echo "::error::variant must be release or debug (got '$VARIANT')"; exit 1 ;; esac
+          case "$VARIANT" in release|debug|perf) ;; *) echo "::error::variant must be release, debug or perf (got '$VARIANT')"; exit 1 ;; esac
           echo "variant $VARIANT"
 
       # The Android SDK stays: ci-build.sh installs the pinned platform, build tools, NDK and CMake into it.
