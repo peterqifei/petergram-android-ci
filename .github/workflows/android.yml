@@ -3,8 +3,9 @@
 # is asked for from public GitLab, so no history reaches GitHub. All build logic is ci/github-build/android/ci-build.sh
 # in the fetched commit; this file only sets up the runner, the caches and the artifact.
 # The `variant` input picks which APK: release (the default, the package for friends), debug (the `.dev` daily
-# candidate), or perf (the `.perf` measurement build with R8, profileable manifest, and symbol bundle).
-# It keys the Gradle caches and reaches ci-build.sh as VARIANT; the job title shows it.
+# candidate), or perf (the `.perf` measurement build with R8, profileable manifest, and symbol bundle); or
+# variant=compile, the Java/Kotlin compile gate (A185), which builds no APK and uploads compile-result.json only.
+# It keys the Gradle caches and the concurrency group and reaches ci-build.sh as VARIANT; the job title shows it.
 # scripts/github-build.sh keeps the build repository's copy equal to this one and dispatches it.
 name: android
 run-name: android ${{ inputs.request_id }}
@@ -21,7 +22,7 @@ on:
         required: true
         type: string
       variant:
-        description: Which APK to build - release (io.gitlab.mydenia.petergram), debug (.dev daily candidate), or perf (.perf measurement build)
+        description: What to build - an APK (release io.gitlab.mydenia.petergram, debug .dev daily candidate, perf .perf measurement build) or compile (the Java/Kotlin compile gate, no APK)
         required: false
         default: 'release'
         type: string
@@ -29,9 +30,10 @@ on:
 permissions:
   contents: read
 
-# One build at a time. A run waiting behind another is replaced by a newer waiting one; the driver starts one.
+# One run at a time per variant, so a compile run does not queue behind an APK build. A run waiting behind
+# another run of the same variant is replaced by a newer waiting one; the driver starts one at a time.
 concurrency:
-  group: android-build
+  group: android-${{ inputs.variant || 'release' }}
   cancel-in-progress: false
 
 defaults:
@@ -40,9 +42,9 @@ defaults:
 
 jobs:
   build:
-    name: APK (${{ inputs.variant || 'release' }})
+    name: ${{ inputs.variant == 'compile' && 'Compile gate' || format('APK ({0})', inputs.variant || 'release') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: ${{ inputs.variant == 'compile' && 90 || 180 }}
     steps:
       - name: Check the inputs
         env:
@@ -52,7 +54,7 @@ jobs:
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::source_sha must be 40 lower-case hex characters"; exit 1; }
           [[ "$REQUEST_ID" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "::error::request_id must be 1 to 64 characters of A-Za-z0-9._-"; exit 1; }
-          case "$VARIANT" in release|debug|perf) ;; *) echo "::error::variant must be release, debug or perf (got '$VARIANT')"; exit 1 ;; esac
+          case "$VARIANT" in release|debug|perf|compile) ;; *) echo "::error::variant must be release, debug, perf or compile (got '$VARIANT')"; exit 1 ;; esac
           echo "variant $VARIANT"
 
       # The Android SDK stays: ci-build.sh installs the pinned platform, build tools, NDK and CMake into it.
@@ -122,6 +124,7 @@ jobs:
           key: gradle-linux-${{ inputs.variant || 'release' }}-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
 
       - name: Upload the APK and its identity
+        if: ${{ inputs.variant != 'compile' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: petergram-android
@@ -129,6 +132,16 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+      # The compile gate builds no APK: its result is the exit code of the run and this one small file.
+      - name: Upload the compile result
+        if: ${{ inputs.variant == 'compile' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: petergram-android
+          path: ci-out/compile-result.json
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Runner after
         if: ${{ !cancelled() }}
