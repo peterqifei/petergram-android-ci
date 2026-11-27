@@ -86,11 +86,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # The key follows what decides the Gradle dependencies: the base commit in the lock, root.patch, the
-      # overlay's gradle file and the shared Rust core (source/rust/**, compiled into the native library by
-      # rust/petergram-core/CMakeLists.txt, so a change there must not reuse an older cache entry), plus the variant,
-      # because a release and a debug build fill the local build cache (build-cache-1) with different tasks. The
-      # vendor tree itself is not cached; native code is built from source every run.
+      # The key follows what decides the Gradle dependencies: the base commit in the lock, root.patch and the
+      # overlay's gradle file, plus the variant, because a release and a debug build fill the local build cache
+      # (build-cache-1) with different tasks. The vendor tree itself is not cached; native code is built from
+      # source every run.
       - name: Gradle cache
         id: gradle-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -99,7 +98,7 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/caches/build-cache-1
             ~/.gradle/wrapper/dists
-          key: gradle-linux-${{ inputs.variant || 'release' }}-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle', 'source/rust/**') }}
+          key: gradle-linux-${{ inputs.variant || 'release' }}-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
           restore-keys: |
             gradle-linux-${{ inputs.variant || 'release' }}-
             gradle-linux-
@@ -122,7 +121,7 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/caches/build-cache-1
             ~/.gradle/wrapper/dists
-          key: gradle-linux-${{ inputs.variant || 'release' }}-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle', 'source/rust/**') }}
+          key: gradle-linux-${{ inputs.variant || 'release' }}-${{ hashFiles('source/source.lock.json', 'source/patches/root.patch', 'source/overlay/petergram/petergram.gradle') }}
 
       - name: Upload the APK and its identity
         if: ${{ inputs.variant != 'compile' }}
